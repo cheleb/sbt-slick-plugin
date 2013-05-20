@@ -65,15 +65,20 @@ object EntitiesMapper extends App {
       def tableMember(member: Member): String = {
         val name = member.name
         if(member.pk)
-          s"def $name = column[${member.dataType}](\042$name\042, O.PrimaryKey)"
+          s"def $name = column[${member.dataType}](\042$name\042, O.NotNull ,O.PrimaryKey, O.AutoInc)"
         else
         s"def $name = column[${member.dataType}](\042$name\042)"
       }
 
       val tableMembers = entity.members.map(tableMember(_)).mkString("\n  ")
       val star = entity.members.map(m => if( m.option) m.name + ".?" else m.name).mkString(" ~ ")
+      val autoInc = entity.members.filterNot(p => p.pk).map(m => if( m.option) m.name + ".?" else m.name).mkString(" ~ ") + " returning " +  entity.members.filter(p => p.pk).map(p=>p.name).mkString(", ")
       println
       println(s"object $daoName extends Table[$name](\042${entity.tableName}\042){\n  $tableMembers\n  def * = $star <> ($name, ${name}.unapply _)\n")
+      
+      println(s"  def autoInc = $autoInc ")
+      
+      println(s"  def insert(o: $name ) = autoInc.insert( " + entity.members.filterNot(p => p.pk).map(m => "o." + m.name ).mkString(", ") + ")")
       
       println(s"  def all() = Query($daoName).list")
       
