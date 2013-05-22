@@ -74,7 +74,7 @@ object EntitiesMapper extends App {
       val star = entity.members.map(m => if( m.option) m.name + ".?" else m.name).mkString(" ~ ")
       val autoInc = entity.members.filterNot(p => p.pk).map(m => if( m.option) m.name + ".?" else m.name).mkString(" ~ ") + " returning " +  entity.members.filter(p => p.pk).map(p=>p.name).mkString(", ")
       println
-      println(s"object $daoName extends Table[$name](\042${entity.tableName}\042){\n  $tableMembers\n  def * = $star <> ($name, ${name}.unapply _)\n")
+      println(s"class $daoName extends Table[$name] with Cruded[$name](\042${entity.tableName}\042){\n  $tableMembers\n  def * = $star <> ($name, ${name}.unapply _)\n")
       
       println(s"  def autoInc = $autoInc ")
       
