@@ -1,9 +1,6 @@
 package net.orcades.db
 
-import scala.slick.session.Database
-import scala.slick.driver.BasicDriver.Implicit._
-import Database.threadLocalSession
-import scala.slick.session.Session
+
 import java.sql.ResultSet
 import java.sql.Types
 import scala.collection.mutable.MutableList
@@ -14,6 +11,7 @@ import scala.io.Source
 import java.io.BufferedWriter
 import java.io.FileWriter
 import sbt._
+import java.sql.DriverManager
 
 case class Entity(name: String, tableName: String, members: List[Member], dao: String)
 case class Member(name: String, dataType: String, pk: Boolean, nullable: Boolean, autoInc: Boolean) {
@@ -21,29 +19,47 @@ case class Member(name: String, dataType: String, pk: Boolean, nullable: Boolean
 }
 
 object EntitiesMapper extends App {
-  Database.forURL("jdbc:postgresql:jug", "test", "test", driver = "org.postgresql.Driver") withSession {
-    //    println("Speakers:")
-    //    val v = Users.all
-    //    println(v)
-    //
-    val tables = allTables
+  val driver = DriverManager.getDriver("org.postgresql.Driver")
+  DriverManager.registerDriver(driver)
+  
+  implicit val conn = DriverManager.getConnection("jdbc:postgresql:jug", "test", "test")
+    
+    val tables = allTables(conn)
 
     tables.foreach(buildEntity)
 
-  }
+  
 
   def buildEntity(table: Table) {
     implicit val builder = new StringBuilder()
     val path = Paths.get("model", table.name + ".scala")
     val exists = Files.exists(path)
+
+    def caseMember(member: Column): String = {
+      val name = member.name
+      if (member.nullable || member.autoInc)
+        name + ": Option[" + member.dataType +"]"
+      else
+        name + ": " + member.dataType
+    }
+
+    val caseMembers = table.columns.map(caseMember(_)).mkString(",")
+    val name = entityName(table.name)
+    val caseClass = "case class " + name + "(" + caseMembers + ")"
+
     if (exists) {
       IO.readLines(path.toFile()).takeWhile(line => !line.startsWith("//GENERATED")).foreach(line => builder ++= line + "\n")
     } else {
-      builder ++= "package model\n"
+      builder ++= "package model\n\n"
+
+      builder ++= caseClass + "\n\n"
+
+      val daoName = getDaoName(table)
+      builder ++= "object " + daoName + " extends " + daoName +"\n\n"
 
     }
     builder ++= "//GENERATED - " + table.name + "\n"
-
+    builder ++= "//" + caseClass + "\n\n"
     buildDAOClass(table)
     builder += '\n'
     builder ++= "// END - " + table.name + "\n"
@@ -57,88 +73,45 @@ object EntitiesMapper extends App {
   }
 
   def buildDAOClass(table: Table)(implicit builder: StringBuilder) {
-    val daoName = if (table.name.charAt(table.name.length() - 1) == 'y')
-      table.name.substring(0, table.name.length() - 2) + "ies"
-    else
-      table.name + "s"
+    val daoName = getDaoName(table)
+
+    def entityName(tableName: String) = {
+      tableName.substring(0, 1).toUpperCase() + tableName.substring(1)
+    }
 
     def buildColumnMapping(column: Column) {
 
       val mapping = if (column.pk)
-        s"def ${column.name} = column[${column.dataType}](\042${column.name}\042, O.NotNull ,O.PrimaryKey, O.AutoInc)"
+        "def " + column.name + " = column["+ column.dataType + "](\042" + column.name + "\042, O.NotNull ,O.PrimaryKey, O.AutoInc)"
       else
-        s"def ${column.name} = column[${column.dataType}](\042${column.name}\042)"
+        "def " + column.name + " = column[" + column.dataType +"](\042" + column.name + "\042)"
 
       builder ++= "    " + mapping + "\n"
     }
 
-    builder ++= s"class $daoName extends Table[${table.name}] with Cruded[${table.name}](\042${table.name}\042){\n" //  $tableMembers\n  def * = $star <> ($name, ${name}.unapply _)\n")
+    builder ++= "class " + daoName + " extends Table[" + table.name + "](\042" + table.name + "\042) with Cruded[" + table.name +"] {\n" //  $tableMembers\n  def * = $star <> ($name, ${name}.unapply _)\n")
 
     table.columns.foreach(buildColumnMapping)
+
+    builder += '\n'
+
+    val star = table.columns.map(m => if (m.option) m.name + ".?" else m.name).mkString(" ~ ")
+    val autoInc = table.columns.filterNot(p => p.pk).map(m => if (m.option) m.name + ".?" else m.name).mkString(" ~ ") + " returning " + table.columns.filter(p => p.pk).map(p => p.name).mkString(", ")
+
+    val name = entityName(table.name)
+
+    builder ++= "    def * = " + star + " <> (" + name + ", " + name + ".unapply _)\n"
+
+    builder ++= "    def autoInc = " + autoInc + "\n"
+
+    builder ++= "    def insert(o: " + name +") = autoInc.insert( " + table.columns.filterNot(p => p.pk).map(m => "o." + m.name).mkString(", ") + ")\n"
+
+    builder ++= "    def all() = Query(" + daoName +").list\n"
 
     builder ++= "}\n"
   }
 
-  def dump()(implicit session: Session) = {
-
-    val metadata = session.metaData
-    val tables = metadata.getTables(session.conn.getCatalog(), "public", null, Array("TABLE"))
-    val entities = MutableList[Entity]()
-    while (tables.next()) {
-
-      val entity = dumpTable(tables.getString("table_name"))
-      entity map { e => entities += e }
-
-      // dumpResultSet(tables)
-    }
-    entities.foreach(writeEntity(_))
-
-    def entityDaoName(entityName: String) = {
-
-      if (entityName.charAt(entityName.length() - 1) == 'y')
-        entityName.substring(0, entityName.length() - 2) + "ies"
-      else
-        entityName + "s"
-    }
-
-    def writeEntity(entity: Entity) = {
-      val name = entity.name
-      val daoName = entityDaoName(name)
-
-      def caseMember(member: Member): String = {
-        val name = member.name
-        if (member.nullable || member.autoInc)
-          s"$name: Option[${member.dataType}]"
-        else
-          s"$name: ${member.dataType}"
-      }
-
-      val caseMembers = entity.members.map(caseMember(_)).mkString(",")
-      println(s"case class $name($caseMembers)")
-
-      def tableMember(member: Member): String = {
-        val name = member.name
-        if (member.pk)
-          s"def $name = column[${member.dataType}](\042$name\042, O.NotNull ,O.PrimaryKey, O.AutoInc)"
-        else
-          s"def $name = column[${member.dataType}](\042$name\042)"
-      }
-
-      val tableMembers = entity.members.map(tableMember(_)).mkString("\n  ")
-      val star = entity.members.map(m => if (m.option) m.name + ".?" else m.name).mkString(" ~ ")
-      val autoInc = entity.members.filterNot(p => p.pk).map(m => if (m.option) m.name + ".?" else m.name).mkString(" ~ ") + " returning " + entity.members.filter(p => p.pk).map(p => p.name).mkString(", ")
-      println
-      println(s"class $daoName extends Table[$name] with Cruded[$name](\042${entity.tableName}\042){\n  $tableMembers\n  def * = $star <> ($name, ${name}.unapply _)\n")
-
-      println(s"  def autoInc = $autoInc ")
-
-      println(s"  def insert(o: $name ) = autoInc.insert( " + entity.members.filterNot(p => p.pk).map(m => "o." + m.name).mkString(", ") + ")")
-
-      println(s"  def all() = Query($daoName).list")
-
-      println("}")
-
-    }
+ 
 
     def entityName(tableName: String) = {
       tableName.substring(0, 1).toUpperCase() + tableName.substring(1)
@@ -158,40 +131,12 @@ object EntitiesMapper extends App {
       }
     }
 
-    def dumpTable(tableName: String): Option[Entity] = {
+   
 
-      def getPks(): Set[String] = {
-        val rs = metadata.getPrimaryKeys(session.conn.getCatalog(), "public", tableName);
-        val set = MutableList[String]()
-        while (rs.next()) {
-          set += rs.getString("COLUMN_NAME")
-        }
-        set.toSet
-      }
-
-      val members = MutableList[Member]()
-
-      val pks = getPks()
-
-      val columns = metadata.getColumns(session.conn.getCatalog(), "public", tableName, null);
-      while (columns.next()) {
-        val columnName = columns.getString("COLUMN_NAME")
-        members += Member(columnName, columnType(columns.getInt("DATA_TYPE")), pks.contains(columnName), columns.getBoolean("NULLABLE"), columns.getString("IS_AUTOINCREMENT") == "YES")
-      }
-
-      Some(Entity(entityName(tableName), tableName, members.toList, entityDaoName(tableName)))
-
-    }
-
-    def dumpResultSet(rs: ResultSet) = {
-
-      for (i <- 1 to rs.getMetaData().getColumnCount()) {
-
-        val nomColonne = rs.getMetaData().getColumnName(i);
-        val valeurColonne = rs.getObject(i);
-        System.out.println(nomColonne + " = " + valeurColonne);
-
-      }
-    }
+  private def getDaoName(table: net.orcades.db.Table): String = {
+    if (table.name.charAt(table.name.length() - 1) == 'y')
+      table.name.substring(0, table.name.length() - 2) + "ies"
+    else
+      table.name + "s"
   }
 }
