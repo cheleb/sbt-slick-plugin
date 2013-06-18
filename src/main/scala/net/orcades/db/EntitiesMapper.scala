@@ -1,6 +1,5 @@
 package net.orcades.db
 
-
 import java.sql.ResultSet
 import java.sql.Types
 import scala.collection.mutable.MutableList
@@ -12,6 +11,7 @@ import java.io.BufferedWriter
 import java.io.FileWriter
 import sbt._
 import java.sql.DriverManager
+import java.sql.Connection
 
 case class Entity(name: String, tableName: String, members: List[Member], dao: String)
 case class Member(name: String, dataType: String, pk: Boolean, nullable: Boolean, autoInc: Boolean) {
@@ -19,26 +19,22 @@ case class Member(name: String, dataType: String, pk: Boolean, nullable: Boolean
 }
 
 object EntitiesMapper extends App {
-  val driver = DriverManager.getDriver("org.postgresql.Driver")
-  DriverManager.registerDriver(driver)
-  
-  implicit val conn = DriverManager.getConnection("jdbc:postgresql:jug", "test", "test")
-    
-    val tables = allTables(conn)
 
-    tables.foreach(buildEntity)
+  def buildAll(implicit conn: Connection, outputDir: File) {
+    println("Build all")
 
-  
+    allTables.foreach(buildEntity)
+  }
 
-  def buildEntity(table: Table) {
+  def buildEntity(table: Table)(implicit outputDir: File) {
     implicit val builder = new StringBuilder()
-    val path = Paths.get("model", table.name + ".scala")
-    val exists = Files.exists(path)
+    val outputFile = outputDir / (table.name + ".scala")
+    val exists = Files.exists(outputFile.toPath())
 
     def caseMember(member: Column): String = {
       val name = member.name
       if (member.nullable || member.autoInc)
-        name + ": Option[" + member.dataType +"]"
+        name + ": Option[" + member.dataType + "]"
       else
         name + ": " + member.dataType
     }
@@ -48,14 +44,26 @@ object EntitiesMapper extends App {
     val caseClass = "case class " + name + "(" + caseMembers + ")"
 
     if (exists) {
-      IO.readLines(path.toFile()).takeWhile(line => !line.startsWith("//GENERATED")).foreach(line => builder ++= line + "\n")
+      IO.readLines(outputFile).takeWhile(line => !line.startsWith("//GENERATED")).foreach(line => builder ++= line + "\n")
     } else {
-      builder ++= "package model\n\n"
+      builder ++= """package models
+        
+import scala.slick.driver.BasicDriver.simple._
+import Database.threadLocalSession
+
+"""
+      if (table.columns.exists(_.dataType == "Timestamp")) {
+        builder ++= """
+import java.sql.Timestamp
+import java.util.Calendar
+
+"""
+      }
 
       builder ++= caseClass + "\n\n"
 
       val daoName = getDaoName(table)
-      builder ++= "object " + daoName + " extends " + daoName +"\n\n"
+      builder ++= "object " + daoName + " extends " + daoName + "\n\n"
 
     }
     builder ++= "//GENERATED - " + table.name + "\n"
@@ -64,11 +72,9 @@ object EntitiesMapper extends App {
     builder += '\n'
     builder ++= "// END - " + table.name + "\n"
 
-    Files.createDirectories(path.getParent())
+    Files.createDirectories(outputFile.toPath().getParent())
 
-    val out: sbt.File = path.toFile()
-
-    IO.write(path.toFile(), builder.toString)
+    IO.write(outputFile, builder.toString)
 
   }
 
@@ -82,14 +88,14 @@ object EntitiesMapper extends App {
     def buildColumnMapping(column: Column) {
 
       val mapping = if (column.pk)
-        "def " + column.name + " = column["+ column.dataType + "](\042" + column.name + "\042, O.NotNull ,O.PrimaryKey, O.AutoInc)"
+        "def " + column.name + " = column[" + column.dataType + "](\042" + column.name + "\042, O.NotNull ,O.PrimaryKey, O.AutoInc)"
       else
-        "def " + column.name + " = column[" + column.dataType +"](\042" + column.name + "\042)"
+        "def " + column.name + " = column[" + column.dataType + "](\042" + column.name + "\042)"
 
       builder ++= "    " + mapping + "\n"
     }
 
-    builder ++= "class " + daoName + " extends Table[" + table.name + "](\042" + table.name + "\042) with Cruded[" + table.name +"] {\n" //  $tableMembers\n  def * = $star <> ($name, ${name}.unapply _)\n")
+    builder ++= "class " + daoName + " extends Table[" + table.name + "](\042" + table.tableName + "\042) with Cruded[" + table.name + "] {\n" //  $tableMembers\n  def * = $star <> ($name, ${name}.unapply _)\n")
 
     table.columns.foreach(buildColumnMapping)
 
@@ -104,34 +110,30 @@ object EntitiesMapper extends App {
 
     builder ++= "    def autoInc = " + autoInc + "\n"
 
-    builder ++= "    def insert(o: " + name +") = autoInc.insert( " + table.columns.filterNot(p => p.pk).map(m => "o." + m.name).mkString(", ") + ")\n"
+    builder ++= "    def insert(o: " + name + ") = autoInc.insert( " + table.columns.filterNot(p => p.pk).map(m => "o." + m.name).mkString(", ") + ")\n"
 
-    builder ++= "    def all() = Query(" + daoName +").list\n"
+    builder ++= "    def all() = Query(" + daoName + ").list\n"
 
     builder ++= "}\n"
   }
 
- 
+  def entityName(tableName: String) = {
+    tableName.substring(0, 1).toUpperCase() + tableName.substring(1)
+  }
 
-    def entityName(tableName: String) = {
-      tableName.substring(0, 1).toUpperCase() + tableName.substring(1)
+  def columnType(t: Int) = {
+    t match {
+      case Types.INTEGER => "Int"
+      case Types.BIGINT => "Long"
+      case Types.VARCHAR => "String"
+      case Types.CLOB => "String"
+      case Types.BIT => "Boolean"
+      case Types.BOOLEAN => "Boolean"
+      case Types.TIMESTAMP => "Timestamp"
+      case Types.DATE => "Calendar"
+      case Types.CHAR => "Char"
     }
-
-    def columnType(t: Int) = {
-      t match {
-        case Types.INTEGER => "Int"
-        case Types.BIGINT => "Long"
-        case Types.VARCHAR => "String"
-        case Types.CLOB => "String"
-        case Types.BIT => "Boolean"
-        case Types.BOOLEAN => "Boolean"
-        case Types.TIMESTAMP => "Timestamp"
-        case Types.DATE => "Calendar"
-        case Types.CHAR => "Char"
-      }
-    }
-
-   
+  }
 
   private def getDaoName(table: net.orcades.db.Table): String = {
     if (table.name.charAt(table.name.length() - 1) == 'y')

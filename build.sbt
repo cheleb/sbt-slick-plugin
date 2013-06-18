@@ -4,7 +4,11 @@ organization := "net.orcades"
 
 name := "sbt-slick-plugin"
 
+version := "0.2-SNAPSHOT"
+
 sbtPlugin := true
+
+libraryDependencies += "com.typesafe" % "config" % "1.0.1"
 
 libraryDependencies += "postgresql" % "postgresql" % "9.1-901.jdbc4"
 
