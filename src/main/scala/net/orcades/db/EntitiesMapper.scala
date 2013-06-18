@@ -62,7 +62,7 @@ import java.util.Calendar
 
       builder ++= caseClass + "\n\n"
 
-      val daoName = getDaoName(table)
+      val daoName = getDaoName(table.name)
       builder ++= "object " + daoName + " extends " + daoName + "\n\n"
 
     }
@@ -79,9 +79,9 @@ import java.util.Calendar
   }
 
   def buildDAOClass(table: Table)(implicit builder: StringBuilder) {
-    val daoName = getDaoName(table)
+    val daoName = getDaoName(table.name)
 
-    def entityName(tableName: String) = {
+    def ucFirst(tableName: String) = {
       tableName.substring(0, 1).toUpperCase() + tableName.substring(1)
     }
 
@@ -105,6 +105,10 @@ import java.util.Calendar
     val autoInc = table.columns.filterNot(p => p.pk).map(m => if (m.option) m.name + ".?" else m.name).mkString(" ~ ") + " returning " + table.columns.filter(p => p.pk).map(p => p.name).mkString(", ")
 
     val name = entityName(table.name)
+
+    table.fks.foreach(fk => builder ++= "    def " + fk.name + " = foreignKey(\"" + fk.name + "\", " + fk.keys.head._1 + ", " + ucFirst(getDaoName(fk.keys.head._2._1)) + ")(_." + fk.keys.head._2._2  + ")\n")
+
+    builder += '\n'
 
     builder ++= "    def * = " + star + " <> (" + name + ", " + name + ".unapply _)\n"
 
@@ -135,10 +139,10 @@ import java.util.Calendar
     }
   }
 
-  private def getDaoName(table: net.orcades.db.Table): String = {
-    if (table.name.charAt(table.name.length() - 1) == 'y')
-      table.name.substring(0, table.name.length() - 2) + "ies"
+  private def getDaoName(tableName: String): String = {
+    if (tableName.charAt(tableName.length() - 1) == 'y')
+      tableName.substring(0, tableName.length() - 2) + "ies"
     else
-      table.name + "s"
+      tableName + "s"
   }
 }
