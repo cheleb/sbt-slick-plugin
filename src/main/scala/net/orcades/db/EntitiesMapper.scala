@@ -1,19 +1,14 @@
 package net.orcades.db
 
-import java.sql.ResultSet
-import java.sql.Types
-import scala.collection.mutable.MutableList
 import net.orcades.db.RDBMSMetadataExtractor._
 import java.nio.file.Files
-import java.nio.file.Paths
-import scala.io.Source
-import java.io.BufferedWriter
-import java.io.FileWriter
+
 import sbt._
-import java.sql.DriverManager
+
 import java.sql.Connection
 
 case class Entity(name: String, tableName: String, members: List[Member], dao: String)
+
 case class Member(name: String, dataType: String, pk: Boolean, nullable: Boolean, autoInc: Boolean) {
   def option = nullable || autoInc
 }
@@ -29,7 +24,7 @@ object EntitiesMapper extends App {
   def buildEntity(table: Table)(implicit outputDir: File) {
     implicit val builder = new StringBuilder()
     val outputFile = outputDir / (table.name + ".scala")
-    val exists = Files.exists(outputFile.toPath())
+    val exists = Files.exists(outputFile.toPath)
 
     def caseMember(member: Column): String = {
       val name = member.name
@@ -47,17 +42,17 @@ object EntitiesMapper extends App {
       IO.readLines(outputFile).takeWhile(line => !line.startsWith("//GENERATED")).foreach(line => builder ++= line + "\n")
     } else {
       builder ++= """package models
-        
+
 import scala.slick.driver.BasicDriver.simple._
 import Database.threadLocalSession
 
-"""
+                  """
       if (table.columns.exists(_.dataType == "Timestamp")) {
         builder ++= """
 import java.sql.Timestamp
 import java.util.Calendar
 
-"""
+                    """
       }
 
       builder ++= caseClass + "\n\n"
@@ -72,7 +67,7 @@ import java.util.Calendar
     builder += '\n'
     builder ++= "// END - " + table.name + "\n"
 
-    Files.createDirectories(outputFile.toPath().getParent())
+    Files.createDirectories(outputFile.toPath.getParent)
 
     IO.write(outputFile, builder.toString)
 
@@ -81,9 +76,6 @@ import java.util.Calendar
   def buildDAOClass(table: Table)(implicit builder: StringBuilder) {
     val daoName = getDaoName(table.name)
 
-    def ucFirst(tableName: String) = {
-      tableName.substring(0, 1).toUpperCase() + tableName.substring(1)
-    }
 
     def buildColumnMapping(column: Column) {
 
@@ -106,7 +98,7 @@ import java.util.Calendar
 
     val name = entityName(table.name)
 
-    table.fks.foreach(fk => builder ++= "    def " + fk.name + " = foreignKey(\"" + fk.name + "\", " + fk.keys.head._1 + ", " + ucFirst(getDaoName(fk.keys.head._2._1)) + ")(_." + fk.keys.head._2._2  + ")\n")
+    table.fks.foreach(foreignKey)
 
     builder += '\n'
 
@@ -119,25 +111,25 @@ import java.util.Calendar
     builder ++= "    def all() = Query(" + daoName + ").list\n"
 
     builder ++= "}\n"
+
+    def foreignKey(fk: FK)(implicit builder: StringBuilder) {
+      val fkName = if (fk.keys.size == 1 && fk.keys.head._1.endsWith("_id"))
+        fk.keys.head._1.substring(0, fk.keys.head._1.lastIndexOf("_id"))
+      else
+        fk.name
+
+      builder ++= "    def " + fkName + " = foreignKey(\"" + fk.name + "\", " + fk.keys.head._1 + ", " + ucFirst(getDaoName(fk.keys.head._2._1)) + ")(_." + fk.keys.head._2._2 + ")\n"
+    }
   }
 
   def entityName(tableName: String) = {
-    tableName.substring(0, 1).toUpperCase() + tableName.substring(1)
+    tableName.substring(0, 1).toUpperCase + tableName.substring(1)
   }
 
-  def columnType(t: Int) = {
-    t match {
-      case Types.INTEGER => "Int"
-      case Types.BIGINT => "Long"
-      case Types.VARCHAR => "String"
-      case Types.CLOB => "String"
-      case Types.BIT => "Boolean"
-      case Types.BOOLEAN => "Boolean"
-      case Types.TIMESTAMP => "Timestamp"
-      case Types.DATE => "Calendar"
-      case Types.CHAR => "Char"
-    }
+  def ucFirst(tableName: String) = {
+    tableName.substring(0, 1).toUpperCase + tableName.substring(1)
   }
+
 
   private def getDaoName(tableName: String): String = {
     if (tableName.charAt(tableName.length() - 1) == 'y')
