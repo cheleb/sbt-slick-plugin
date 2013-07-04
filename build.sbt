@@ -1,4 +1,6 @@
-scalaVersion in ThisBuild := "2.9.2"
+sbtVersion in Global := "0.13.0-RC1"
+
+scalaVersion in ThisBuild := "2.10.2"
 
 organization := "net.orcades"
 
